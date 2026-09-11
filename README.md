@@ -206,23 +206,45 @@ Then build with that platform:
 bazel build --platforms=//:linux_x86_64_gnu_2_28_libstdcxx_17_0_0 //:app
 ```
 
-libstdc++ is currently supported as a dynamic C++ runtime, so C++ binaries
-using it must set `linkstatic = False`:
+libstdc++ is only supported as a dynamic C++ runtime: binaries and shared
+libraries built for a libstdc++ platform get `NEEDED` entries for
+`libstdc++.so.6` and `libunwind.so.1`, with the symbol versions of the selected
+GCC release. libc++ is linked statically by default; a platform carrying the
+`@llvm//constraints/cxxstdlib/linkage:dynamic` constraint links `libc++.so.1`,
+`libc++abi.so.1` and `libunwind.so.1` dynamically instead (Bazel 9 and later,
+glibc targets only since musl targets link with `-static`).
+
+How the runtime linkage is decided depends on the Bazel version:
+
+- **Bazel 9 and later**: the toolchain registers a C++ runtimes toolchain
+  (`@bazel_tools//tools/cpp:cc_runtimes_toolchain_type`) for every Linux
+  target platform. rules_cc adds the runtimes it lists as ordinary dependencies
+  of every `cc_library`, `cc_binary`, `cc_test`, `cc_import` and
+  `cc_shared_library`, and each runtime is linked the only way it is
+  provided: libstdc++ as a shared library, libc++ as static archives or, with
+  the `linkage:dynamic` constraint, as shared libraries. The
+  choice is therefore made per target platform, and `linkstatic`,
+  `--dynamic_mode` and the rule kind no longer matter; in particular
+  `cc_shared_library` and the default `linkstatic = True` work with libstdc++.
+  A workspace that wants a different policy can register its own toolchain of
+  that type ahead of `@llvm//toolchain:all`; see
+  `@llvm//runtimes:cc_runtimes.bzl`.
+- **Bazel 8**: the C++ rules are Bazel's native rules, which do not consult
+  the runtimes toolchain, so the toolchain supplies the runtimes through the
+  `cc_toolchain` `static_runtime_lib`/`dynamic_runtime_lib` attributes. rules_cc
+  picks between them from the linking mode of the consuming target, so C++
+  binaries using libstdc++ must set `linkstatic = False`, `--dynamic_mode=off`
+  cannot be combined with libstdc++, and `cc_shared_library` (which always
+  links the static set) cannot use libstdc++ at all.
 
 ```starlark
 cc_binary(
     name = "app",
     srcs = ["main.cc"],
+    # Only needed on Bazel 8.
     linkstatic = False,
 )
 ```
-
-With Bazel's default dynamic mode, `cc_binary` defaults `linkstatic` to `True`,
-which selects the toolchain's static C++ runtime path. For libstdc++ that would
-make static libstdc++ the default, which is not what most Linux users expect,
-and this toolchain intentionally supports libstdc++ through the dynamic runtime
-path. `--dynamic_mode=off` also forces the static runtime path, even when
-`linkstatic = False`, so it cannot be combined with libstdc++ support.
 
 At the moment, libstdc++ support is limited to Linux glibc targets. Additional
 targets can be added based on demand; musl + libstdc++ is feasible too, even if
@@ -260,9 +282,10 @@ example with libc++), the latest declared GCC version is used. Versions that
 compiler-rt has no symbols for (such as `GCC_4.7.0`) are left out, as they
 would be for a libgcc built without them.
 
-Only the dynamic unwinder changes: it is one of the toolchain's dynamic
-runtime libraries, so it is linked whenever the C++ runtime is (a `cc_binary`
-with `linkstatic = False`), while static links keep the static libunwind.
+Only the dynamic unwinder changes: it is linked whenever the C++ runtime is
+linked dynamically (on Bazel 9, wherever the platform says so: libstdc++, or
+libc++ with the `linkage:dynamic` constraint; on Bazel 8, a `cc_binary` with
+`linkstatic = False`), while static links keep the static libunwind.
 `-lgcc`, `-lgcc_eh` and `-lgcc_s` keep resolving to empty stub libraries
 (`--@llvm//config:experimental_stub_libgcc`, always on with llvm-libgcc; see
 "Usage with Rust"), so nothing depends on `libgcc_s.so.1` unless the toolchain

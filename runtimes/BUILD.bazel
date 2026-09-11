@@ -6,6 +6,7 @@ load("@llvm-project//:vars.bzl", "LLVM_VERSION_MAJOR")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//toolchain/args:llvm_target_triple.bzl", "LLVM_TARGET_TRIPLE")
 load("//toolchain/runtimes:cc_stage0_object.bzl", "cc_stage0_object")
+load(":cc_runtimes.bzl", "bazel_supports_cc_runtimes_toolchain")
 load(":copy_to_resource_directory.bzl", "copy_to_resource_directory")
 
 exports_files(["module_map.BUILD.bazel"])
@@ -59,12 +60,29 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# On Bazel >= 9 the Linux C++ runtimes come from the C++ runtimes toolchain
+# (//runtimes/cxxstdlib:cc_runtimes, see cc_runtimes.bzl) instead of the
+# cc_toolchain's static_runtime_lib/dynamic_runtime_lib attributes. Older Bazel
+# versions keep the embedded-runtime path.
+_LINUX_CXX_RUNTIMES_FROM_CC_TOOLCHAIN = [] if bazel_supports_cc_runtimes_toolchain() else [
+    "//runtimes/cxxstdlib:static_runtime_lib",
+    "//runtimes/unwindlib:static_runtime_lib",
+]
+
+_LINUX_CXX_DYNAMIC_RUNTIMES_FROM_CC_TOOLCHAIN = [] if bazel_supports_cc_runtimes_toolchain() else [
+    "//runtimes/cxxstdlib:dynamic_runtime_lib",
+    "//runtimes/unwindlib:dynamic_runtime_lib",
+]
+
 filegroup(
     name = "static_runtime_lib",
-    srcs = [
-        "//runtimes/cxxstdlib:static_runtime_lib",
-        "//runtimes/unwindlib:static_runtime_lib",
-    ],
+    srcs = select({
+        "@platforms//os:linux": _LINUX_CXX_RUNTIMES_FROM_CC_TOOLCHAIN,
+        "//conditions:default": [
+            "//runtimes/cxxstdlib:static_runtime_lib",
+            "//runtimes/unwindlib:static_runtime_lib",
+        ],
+    }),
     visibility = ["//visibility:public"],
 )
 
@@ -104,10 +122,13 @@ config_setting(
 # targets are Darwin-only, hence the macOS gate.
 filegroup(
     name = "dynamic_runtime_lib",
-    srcs = [
-        "//runtimes/cxxstdlib:dynamic_runtime_lib",
-        "//runtimes/unwindlib:dynamic_runtime_lib",
-    ] + select({
+    srcs = select({
+        "@platforms//os:linux": _LINUX_CXX_DYNAMIC_RUNTIMES_FROM_CC_TOOLCHAIN,
+        "//conditions:default": [
+            "//runtimes/cxxstdlib:dynamic_runtime_lib",
+            "//runtimes/unwindlib:dynamic_runtime_lib",
+        ],
+    }) + select({
         ":_asan_dynamic_runtime_macos": ["//runtimes/compiler-rt:clang_rt.asan.shared"],
         "//conditions:default": [],
     }) + select({
@@ -407,6 +428,17 @@ bzl_library(
     srcs = ["defs.bzl"],
     visibility = ["//visibility:public"],
     deps = ["@bazel_lib//lib:run_binary"],
+)
+
+bzl_library(
+    name = "cc_runtimes",
+    srcs = ["cc_runtimes.bzl"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@bazel_features//:features",
+        "@rules_cc//cc:find_cc_toolchain_bzl",
+        "@rules_cc//cc/common",
+    ],
 )
 
 bzl_library(

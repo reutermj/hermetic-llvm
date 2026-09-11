@@ -1,0 +1,23 @@
+# How the C++ standard library is linked into binaries and shared libraries.
+#
+# Only libc++ honours this constraint: libstdc++ is only available as a shared
+# library and is always linked dynamically. It takes effect on Bazel >= 9, where
+# the C++ runtimes toolchain decides the linkage per target platform (see
+# //runtimes:cc_runtimes.bzl); on Bazel 8 the linkage follows linkstatic and
+# --dynamic_mode as before.
+package(default_visibility = ["//visibility:public"])
+
+constraint_setting(
+    name = "linkage",
+    default_constraint_value = "static",
+)
+
+constraint_value(
+    name = "static",
+    constraint_setting = "linkage",
+)
+
+constraint_value(
+    name = "dynamic",
+    constraint_setting = "linkage",
+)

@@ -201,22 +201,20 @@ not define is a build error rather than a silent gap.
 `//runtimes/unwindlib` is the unwinder runtime group, next to
 `//runtimes/cxxstdlib`: its `unwinder.shared` alias resolves to
 `libgcc_s.shared` when `//config:experimental_use_llvm_libgcc` is set and to
-`libunwind.shared` otherwise, and its `dynamic_runtime_lib` filegroup hands it
-to the `cc_toolchain`'s dynamic runtime libraries on Linux. Its
-`static_runtime_lib` stays the static libunwind, so `linkstatic = True` links
-are unchanged, and `-lgcc`, `-lgcc_eh` and `-lgcc_s` keep resolving to the
-empty stubs in `unwindlib_library_search_directory`, so no link can acquire a
-`libgcc_s.so.1` dependency that the runtime library machinery does not also
-place in runfiles with an rpath. `libstdc++.so.6` and `libc++abi.so.1` only
-import `_Unwind_*` and carry no unwinder `NEEDED` entry of their own, so they
-did not need relinking.
-
-Which links get the dynamic runtime libraries is rules_cc's decision, from the
-linking mode of the consuming target: `cc_binary` with `linkstatic = False`
-(and, in the same way, `linkshared = True`). `cc_shared_library` always links
-its dependencies statically and therefore keeps the static libunwind; the
-C++ runtimes toolchain of rules_cc, which lets the platform decide instead,
-is a separate change on top of this one.
+`libunwind.shared` otherwise. On Bazel 9 it is wrapped as
+`unwinder_shared_runtime`, the shared unwinder that the C++ runtimes toolchain
+(`//runtimes/cxxstdlib:cc_runtimes`, see `//runtimes:cc_runtimes.bzl`) hands
+to every C++ target whose platform links the C++ runtime dynamically:
+libstdc++ platforms always, libc++ platforms with the
+`//constraints/cxxstdlib/linkage:dynamic` constraint. Platforms that link
+libc++ statically keep the static libunwind. On Bazel 8, where the
+`cc_toolchain` `dynamic_runtime_lib` attribute is still in charge, the alias is
+listed there and the linking mode of the consuming target decides. Either way
+`-lgcc`, `-lgcc_eh` and `-lgcc_s` keep resolving to the empty stubs in
+`unwindlib_library_search_directory`, so no link acquires a `libgcc_s.so.1`
+dependency that rules_cc does not also place in runfiles with an rpath.
+`libstdc++.so.6` and `libc++abi.so.1` only import `_Unwind_*` and carry no
+unwinder `NEEDED` entry of their own, so they did not need relinking.
 
 ### 6. Tests
 
@@ -228,12 +226,15 @@ one definition per version, the versions and versioned symbols the release
 must have, the versions it must not have yet (`GCC_12.0.0` before GCC 12,
 `GCC_11.0` on aarch64 before GCC 11), and that every exported symbol carries a
 version. A throw-and-catch binary, the same binary catching across a DSO
-boundary (the thrower in a `cc_binary(linkshared = True)` shared object linked
-through `cc_import`), and that shared object are built with
-`linkstatic = False` for libc++ and libstdc++ on both architectures, inspected
-for their `NEEDED` entries, and run on the host's architecture. A binary with
-the default `linkstatic` is checked to depend on neither `libgcc_s.so.1` nor
-`libunwind.so.1`.
+boundary through a `cc_shared_library` in `dynamic_deps`, and the shared
+objects of both `cc_binary(linkshared = True)` and `cc_shared_library` are
+built for libstdc++ and for dynamically linked libc++ on both architectures,
+inspected for their `NEEDED` entries, and run on the host's architecture. A
+binary on the default (static libc++) platform is checked to depend on
+neither `libgcc_s.so.1` nor `libunwind.so.1`, and a binary over a chain of
+`cc_library` dependencies is checked, under every `linkstatic` and
+`--dynamic_mode` setting, to link those statically while depending on
+`libgcc_s.so.1`.
 
 ## What it produces
 
@@ -276,11 +277,14 @@ libraries an executable is combined with.
   base node. The awk reproduces what GCC itself produces from that file.
 - `libgcc.a` and `libgcc_eh.a` are not provided, and `-lgcc_s` still resolves
   to the stub rather than to this library.
-- `cc_shared_library`, and `cc_binary` with the default `linkstatic`, keep
-  the static libunwind: the `cc_toolchain` runtime libraries follow the
-  linking mode of the consuming target, and `cc_shared_library` always links
-  statically. Letting the target platform decide instead is what the rules_cc
-  C++ runtimes toolchain provides; adopting it is a separate change.
+- Whether a target links the unwinder dynamically at all is a property of
+  the target platform, not of the target: with the C++ runtimes toolchain the
+  runtimes are dependencies rules_cc adds to every C++ target, and each is
+  linked the only way it is provided. A libc++ platform without the
+  `linkage:dynamic` constraint never depends on `libgcc_s.so.1`. On Bazel 8
+  the `cc_toolchain` runtime libraries follow the linking mode of the
+  consuming target instead, so `cc_shared_library` and the default
+  `linkstatic` keep the static libunwind there.
 - The version nodes and symbol order in the map follow awk's array iteration
   order, as in GCC; they are deterministic for a given awk but can differ
   between execution platforms.
