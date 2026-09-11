@@ -1,0 +1,55 @@
+load("@llvm//3rd_party/llvm-project/x.x/llvm-libgcc:libgcc_map.bzl", "libgcc_map")
+load("@llvm//toolchain/runtimes:cc_runtime_shared_library.bzl", "cc_runtime_stage1_libgcc_shared_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# libgcc.map is generated the way libgcc/Makefile.in generates it for
+# libgcc_s.so: GCC's libgcc-std.ver and target fragments (the GCC version is
+# the one //constraints/cxxstdlib selects, like libstdc++) run through
+# mkmap-symver.awk, with the symbols of libunwind and the compiler-rt builtins
+# standing in for libgcc's objects. Upstream llvm-libgcc instead ships a
+# hand-maintained snapshot of that intersection, gcc_s.ver.in.
+libgcc_map(
+    name = "libgcc.map",
+    map_in = "@gcc//:libgcc.map.in",
+    mkmap = "@gcc//:libgcc_mkmap_symver",
+    deps = [
+        "//compiler-rt:builtins",
+        "//libunwind",
+    ],
+)
+
+# Mirrors CMakeLists.txt in this directory: libgcc_s.so.1 is libunwind with
+# the compiler-rt builtins linked in and the version script applied, so it
+# exports the ABI of GCC's libgcc_s.so.1. The stage1 libgcc builder compiles
+# the builtins without hidden visibility (COMPILER_RT_BUILTINS_HIDE_SYMBOLS=OFF).
+#
+# Upstream keeps the libunwind.so.1 soname and installs libgcc_s.so.1 as a
+# symlink to it. Here the soname is libgcc_s.so.1 so that binaries record the
+# same dependency GCC-built binaries do.
+#
+# Symbols that GCC's map lists but compiler-rt declares with hidden
+# visibility, such as __cpu_indicator_init and __cpu_model
+# (lib/builtins/cpu_model/x86.c), stay local. GCC's libgcc_s exports them only
+# as a non-default version, for binaries linked against GCC 4.8.
+cc_runtime_stage1_libgcc_shared_library(
+    name = "libgcc_s.shared",
+    additional_linker_inputs = [":libgcc.map"],
+    shared_lib_name = "libgcc_s.so.1",
+    # @gcc//:libgcc.map.in declares the version script inputs for these
+    # targets.
+    target_compatible_with = select({
+        "@llvm//platforms/config:linux_x86_64_gnu": [],
+        "@llvm//platforms/config:linux_aarch64_gnu": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    user_link_flags = [
+        "-Wl,-soname,libgcc_s.so.1",
+        "-Wl,--version-script=$(location :libgcc.map)",
+        "-lm",
+    ],
+    deps = [
+        "//compiler-rt:builtins",
+        "//libunwind",
+    ],
+)

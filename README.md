@@ -118,7 +118,7 @@ Identical `constraint_values` still do not guarantee identical paths. The name c
 We highly recommend using [rules_rs](https://github.com/hermeticbuild/rules_rs) to seamlessly interop the Rust and CC toolchains. It is best to use the toolchains and platforms defined by that ruleset to configure everything properly.
 
 If you wish to setup things manually, you will likely require a few flags:
-- Rust passes `-lgcc_s` when linking, so make sure you have not set `--@llvm//config:experimental_stub_libgcc_s=False`.
+- Rust passes `-lgcc_s` when linking, so make sure you have not set `--@llvm//config:experimental_stub_libgcc=False`.
 - Rust `cc-rs` crate does not properly account for `$AR` and `$ARFLAGS` env vars, so it does not work when `llvm-libtool-darwin` is used as the archiver. You will want to set `--@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False` to avoid failure in build scripts using `cc-rs`.
 - Rust forces `-no-pie` when linking musl targets, while we default to `-static-pie`, which are incompatible. You can configure your platform with the `@llvm//constraints/pie:off` constraint_value to harmonize the link flags.
 
@@ -227,6 +227,50 @@ path. `--dynamic_mode=off` also forces the static runtime path, even when
 At the moment, libstdc++ support is limited to Linux glibc targets. Additional
 targets can be added based on demand; musl + libstdc++ is feasible too, even if
 it is an uncommon configuration.
+
+### Unwinder: libunwind or libgcc_s (llvm-libgcc)
+
+Dynamically linked binaries depend on the toolchain's unwinder,
+`libunwind.so.1`, where GCC-built binaries depend on `libgcc_s.so.1`. To get
+the latter, set:
+
+```sh
+bazel build --@llvm//config:experimental_use_llvm_libgcc=True //:app
+```
+
+This builds `libgcc_s.so.1` the way upstream
+[llvm-libgcc](https://github.com/llvm/llvm-project/tree/main/llvm-libgcc)
+does: libunwind and the compiler-rt builtins linked into one shared library
+whose exports carry the `GCC_*` symbol versions of GCC's `libgcc_s.so.1`
+(`_Unwind_Resume@@GCC_3.0`, `__udivti3@@GCC_3.0`,
+`_Unwind_GetIPInfo@@GCC_4.2.0`, ...). Binaries and shared objects then record
+the same `libgcc_s.so.1` dependency as GCC-built ones, and prebuilt libraries
+linked against GCC's `libgcc_s`, which import those versioned symbols, can be
+loaded next to them. Both libc++ and libstdc++ are supported, on x86_64 and
+aarch64 glibc targets.
+
+The symbol versions are the ones of the selected GCC release: the version
+script is generated from that release's `libgcc/libgcc-std.ver` and target
+fragments with `libgcc/mkmap-symver.awk`, exactly as GCC generates
+`libgcc.map` for its own `libgcc_s.so`, only with the symbols of libunwind and
+compiler-rt in place of libgcc's. The GCC release is the one the
+`@llvm//constraints/cxxstdlib:libstdcxx.<version>` constraint selects, so a
+libstdc++ platform gets the matching `libgcc_s`; without that constraint (for
+example with libc++), the latest declared GCC version is used. Versions that
+compiler-rt has no symbols for (such as `GCC_4.7.0`) are left out, as they
+would be for a libgcc built without them.
+
+Only the dynamic unwinder changes: it is one of the toolchain's dynamic
+runtime libraries, so it is linked whenever the C++ runtime is (a `cc_binary`
+with `linkstatic = False`), while static links keep the static libunwind.
+`-lgcc`, `-lgcc_eh` and `-lgcc_s` keep resolving to empty stub libraries
+(`--@llvm//config:experimental_stub_libgcc`, always on with llvm-libgcc; see
+"Usage with Rust"), so nothing depends on `libgcc_s.so.1` unless the toolchain
+adds it, with the runfiles and rpath that come with that. `libgcc.a` and
+`libgcc_eh.a` are not provided.
+
+The context and the method are written up in
+[`3rd_party/llvm-project/x.x/llvm-libgcc/README.md`](3rd_party/llvm-project/x.x/llvm-libgcc/README.md).
 
 ### ARM (armv7)
 
