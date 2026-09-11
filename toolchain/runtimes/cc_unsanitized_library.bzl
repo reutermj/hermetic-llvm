@@ -1,3 +1,4 @@
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@rules_cc//cc/private:graph_node_info.bzl", "GraphNodeInfo")  # buildifier: disable=bzl-visibility
 load("@rules_cc//cc/private/rules_impl:cc_shared_library.bzl", "graph_structure_aspect")  # buildifier: disable=bzl-visibility
@@ -79,13 +80,38 @@ _reset_sanitizers = transition(
     ],
 )
 
+def _without_cc_runtimes(cc_info, cc_runtimes):
+    """Drops the linker inputs the C++ runtimes toolchain added to the dep.
+
+    The dep is compiled at runtime_stage = complete for its headers, but the
+    result is linked into the runtimes themselves (libc++ is added explicitly
+    by cc_internal_symbolizer_object), so the runtimes rules_cc adds as
+    dependencies of every C++ target on Bazel >= 9 must not come along. The
+    toolchain target is evaluated in the dep's configuration, so its list is
+    exactly what the dep received. See //runtimes:cc_runtimes.bzl.
+    """
+    excluded = {runtime.label: True for runtime in cc_runtimes[platform_common.ToolchainInfo].cc_runtimes_info.runtimes}
+    if not excluded:
+        return cc_info
+    linker_inputs = [
+        linker_input
+        for linker_input in cc_info.linking_context.linker_inputs.to_list()
+        if linker_input.owner not in excluded
+    ]
+    return CcInfo(
+        compilation_context = cc_info.compilation_context,
+        linking_context = cc_common.create_linking_context(
+            linker_inputs = depset(linker_inputs, order = "topological"),
+        ),
+    )
+
 def _cc_unsanitized_library_impl(ctx):
     # It's a list because it's transitioned.
     dep = ctx.attr.dep[0]
 
     providers = [
         dep[DefaultInfo],
-        dep[CcInfo],
+        _without_cc_runtimes(dep[CcInfo], ctx.attr._cc_runtimes[0]),
     ]
 
     if GraphNodeInfo in dep:
@@ -111,5 +137,10 @@ cc_unsanitized_library = rule(
         ),
         "disable_zstd": attr.bool(),
         "platform": attr.label(),
+        "_cc_runtimes": attr.label(
+            default = "//runtimes/cxxstdlib:cc_runtimes",
+            cfg = _reset_sanitizers,
+            providers = [platform_common.ToolchainInfo],
+        ),
     },
 )

@@ -1,4 +1,5 @@
 load("//platforms:common.bzl", "MSVC_TARGET_STAGE0_SUPPORTED_EXECS", "SUPPORTED_EXECS", "SUPPORTED_TARGETS")
+load("//runtimes:cc_runtimes.bzl", "CC_RUNTIMES_TOOLCHAIN_TYPE", "bazel_supports_cc_runtimes_toolchain")
 load("//toolchain:merged_resource_directory.bzl", "merged_resource_directory")
 load("//toolchain:selects.bzl", "platform_cc_tool_map", "platform_module_map", "platform_resource_dir")
 load("//toolchain/args:resource_directory_args.bzl", "resource_directory_args")
@@ -89,3 +90,28 @@ def declare_toolchains(*, execs = SUPPORTED_EXECS, targets = SUPPORTED_TARGETS):
                     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
                     visibility = ["//visibility:public"],
                 )
+
+    if not bazel_supports_cc_runtimes_toolchain():
+        return
+
+    # C++ runtimes toolchain: rules_cc links the runtimes it lists into every
+    # C++ target built for the platform. It is resolved for user programs only
+    # (runtime_stage = complete); the runtimes themselves are built at earlier
+    # stages, which keeps them from depending on themselves. Linux only for now:
+    # macOS takes libc++ from the SDK and Windows keeps the cc_toolchain
+    # static_runtime_lib/dynamic_runtime_lib path. See //runtimes:cc_runtimes.bzl.
+    for (target_os, target_cpu) in targets:
+        if target_os != "linux":
+            continue
+
+        native.toolchain(
+            name = "cc_runtimes_" + target_os + "_" + target_cpu,
+            target_compatible_with = [
+                "@platforms//cpu:" + target_cpu,
+                "@platforms//os:" + target_os,
+            ],
+            target_settings = ["@llvm//toolchain:runtimes_all"],
+            toolchain = "@llvm//runtimes/cxxstdlib:cc_runtimes",
+            toolchain_type = CC_RUNTIMES_TOOLCHAIN_TYPE,
+            visibility = ["//visibility:public"],
+        )

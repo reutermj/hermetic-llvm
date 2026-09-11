@@ -1,4 +1,5 @@
 load("@bazel_skylib//lib:selects.bzl", "selects")
+load("//runtimes:cc_runtimes.bzl", "cc_runtime_import", "cc_runtimes_toolchain")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -6,6 +7,18 @@ config_setting(
     name = "libcxx_linux",
     constraint_values = [
         "//constraints/cxxstdlib:libcxx",
+        "@platforms//os:linux",
+    ],
+)
+
+# libc++ linked dynamically, selected through the platform. A specialization
+# of :libcxx_linux, so both may appear in one select. musl targets link with
+# -static and cannot use it.
+config_setting(
+    name = "libcxx_linux_dynamic",
+    constraint_values = [
+        "//constraints/cxxstdlib:libcxx",
+        "//constraints/cxxstdlib/linkage:dynamic",
         "@platforms//os:linux",
     ],
 )
@@ -130,4 +143,58 @@ filegroup(
         # TODO(zbarsky): windows?
         "//conditions:default": [],
     }),
+)
+
+# C++ runtimes toolchain (Bazel >= 9). The toolchain registered by
+# //toolchain:declare_toolchains.bzl for Linux targets points here, and rules_cc
+# adds the selected runtimes as dependencies of every C++ target. Each runtime
+# decides its own linkage by what it provides, independently of linkstatic and
+# --dynamic_mode: libstdc++ only exposes a shared library, so it is always
+# linked dynamically; libc++ and libc++abi expose either static archives or
+# shared libraries depending on the //constraints/cxxstdlib/linkage constraint
+# of the target platform. (This toolchain does not declare
+# supports_dynamic_linker on Linux, so rules_cc would pick the static archive
+# of a runtime exposing both anyway.) The unwinder follows the C++ standard
+# library and comes from //runtimes/unwindlib. See //runtimes:cc_runtimes.bzl.
+cc_runtime_import(
+    name = "libcxx_static_runtime",
+    static_library = "@llvm-project//libcxx:libcxx.static",
+)
+
+cc_runtime_import(
+    name = "libcxxabi_static_runtime",
+    static_library = "@llvm-project//libcxxabi:libcxxabi.static",
+)
+
+cc_runtime_import(
+    name = "libcxx_shared_runtime",
+    shared_library = "@llvm-project//libcxx:libcxx.shared",
+)
+
+cc_runtime_import(
+    name = "libcxxabi_shared_runtime",
+    shared_library = "@llvm-project//libcxxabi:libcxxabi.shared",
+)
+
+cc_runtime_import(
+    name = "libstdcxx_shared_runtime",
+    shared_library = "//runtimes/libstdcxx:libstdcxx.shared",
+)
+
+# The C++ standard library, then the unwinder: static archives must come after
+# the archives that reference them.
+cc_runtimes_toolchain(
+    name = "cc_runtimes",
+    runtimes = select({
+        ":libstdcxx_linux": [":libstdcxx_shared_runtime"],
+        ":libcxx_linux_dynamic": [
+            ":libcxx_shared_runtime",
+            ":libcxxabi_shared_runtime",
+        ],
+        ":libcxx_linux": [
+            ":libcxx_static_runtime",
+            ":libcxxabi_static_runtime",
+        ],
+        "//conditions:default": [],
+    }) + ["//runtimes/unwindlib:unwinder_runtime"],
 )

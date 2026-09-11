@@ -1,5 +1,6 @@
 load("@rules_cc//cc/toolchains:feature_set.bzl", "cc_feature_set")
 load("@rules_cc//cc/toolchains:toolchain.bzl", _cc_toolchain = "cc_toolchain")
+load("//runtimes:cc_runtimes.bzl", "bazel_supports_cc_runtimes_toolchain")
 
 _WINDOWS_MSVC_SUPPORTS_HEADER_PARSING = False
 
@@ -9,6 +10,16 @@ def cc_toolchain(
         module_map = None,
         extra_args = None):
     extra_args = extra_args or []
+
+    # On Bazel >= 9 the Linux C++ runtimes are dependencies supplied by the C++
+    # runtimes toolchain (see //runtimes:cc_runtimes.bzl), so the cc_toolchain
+    # no longer links its static_runtime_lib/dynamic_runtime_lib there and does
+    # not enable static_link_cpp_runtimes, which is what makes rules_cc consult
+    # those attributes.
+    linux_cpp_runtimes_features = [] if bazel_supports_cc_runtimes_toolchain() else [
+        "@llvm//toolchain/features:static_link_cpp_runtimes",
+    ]
+
     cc_feature_set(
         name = name + "_msvc_known_features",
         all_of = [
@@ -131,9 +142,8 @@ def cc_toolchain(
         all_of = select({
             "@platforms//os:linux": [
                 "@llvm//toolchain/features/interface_libraries:feature",
-                "@llvm//toolchain/features:static_link_cpp_runtimes",
                 "@llvm//toolchain/features/runtime_library_search_directories:feature",
-            ],
+            ] + linux_cpp_runtimes_features,
             "@platforms//os:macos": [
                 "@llvm//toolchain/features/interface_libraries:feature",
                 # macOS links libc++ from the SDK, so it doesn't statically link

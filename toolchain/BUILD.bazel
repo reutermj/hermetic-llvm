@@ -541,6 +541,7 @@ bzl_library(
     name = "cc_toolchain",
     srcs = ["cc_toolchain.bzl"],
     deps = [
+        "//runtimes:cc_runtimes",
         "@rules_cc//cc/toolchains:toolchain_rules",
     ],
 )
@@ -559,6 +560,7 @@ bzl_library(
         ":merged_resource_directory",
         ":selects",
         "//platforms:common",
+        "//runtimes:cc_runtimes",
         "//toolchain/args:resource_directory_args",
     ],
 )

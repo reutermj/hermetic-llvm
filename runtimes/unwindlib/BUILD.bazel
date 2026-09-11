@@ -1,4 +1,5 @@
 load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("//runtimes:cc_runtimes.bzl", "cc_runtime_import")
 load("//runtimes:defs.bzl", "stub_library")
 
 # The unwinder runtime: libunwind, or libgcc_s.so.1 built from libunwind and
@@ -55,6 +56,29 @@ filegroup(
     srcs = select({
         "@platforms//os:linux": [":unwinder.shared"],
         "//conditions:default": [],
+    }),
+)
+
+# C++ runtimes toolchain (Bazel >= 9, see //runtimes:cc_runtimes.bzl): the
+# unwinder listed by //runtimes/cxxstdlib:cc_runtimes. It follows the C++
+# standard library's linkage: shared when that is shared (libstdc++, or libc++
+# with //constraints/cxxstdlib/linkage:dynamic), static otherwise.
+cc_runtime_import(
+    name = "libunwind_static_runtime",
+    static_library = "//runtimes/libunwind:libunwind.static",
+)
+
+cc_runtime_import(
+    name = "unwinder_shared_runtime",
+    shared_library = ":unwinder.shared",
+)
+
+alias(
+    name = "unwinder_runtime",
+    actual = select({
+        "//runtimes/cxxstdlib:libstdcxx_linux": ":unwinder_shared_runtime",
+        "//runtimes/cxxstdlib:libcxx_linux_dynamic": ":unwinder_shared_runtime",
+        "//conditions:default": ":libunwind_static_runtime",
     }),
 )
 

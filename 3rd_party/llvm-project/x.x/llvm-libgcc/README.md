@@ -130,11 +130,14 @@ detail next to its code:
   base node. The awk reproduces what GCC itself produces from that file.
 - `libgcc.a` and `libgcc_eh.a` are not provided, and `-lgcc_s` still resolves
   to the stub rather than to this library.
-- `cc_shared_library`, and `cc_binary` with the default `linkstatic`, keep
-  the static libunwind: the `cc_toolchain` runtime libraries follow the
-  linking mode of the consuming target, and `cc_shared_library` always links
-  statically. Letting the target platform decide instead is what the rules_cc
-  C++ runtimes toolchain provides; adopting it is a separate change.
+- Whether a target links the unwinder dynamically at all is a property of
+  the target platform, not of the target: with the C++ runtimes toolchain the
+  runtimes are dependencies rules_cc adds to every C++ target, and each is
+  linked the only way it is provided. A libc++ platform without the
+  `linkage:dynamic` constraint never depends on `libgcc_s.so.1`. On Bazel 8
+  the `cc_toolchain` runtime libraries follow the linking mode of the
+  consuming target instead, so `cc_shared_library` and the default
+  `linkstatic` keep the static libunwind there.
 - The version nodes and symbol order in the map follow awk's array iteration
   order, as in GCC; they are deterministic for a given awk but can differ
   between execution platforms.
